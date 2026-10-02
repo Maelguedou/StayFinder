@@ -1,0 +1,102 @@
+# Services pour développer : code local monté, base et outils dans des conteneurs.
+services:
+  web:
+    build:
+      context: .
+      dockerfile: ./docker/development/nginx/Dockerfile
+    ports:
+      - "80:80"
+    volumes:
+      # Montage bind : les changements locaux apparaissent immédiatement dans le conteneur.
+      - ./:/var/www:ro
+    networks: [laravel-development]
+    depends_on:
+      php-fpm:
+        condition: service_started
+
+  php-fpm:
+    build:
+      context: .
+      dockerfile: ./docker/common/php-fpm/Dockerfile
+      target: development
+      args:
+        XDEBUG_ENABLED: true
+        XDEBUG_MODE: develop,debug
+        XDEBUG_HOST: host.docker.internal
+        XDEBUG_IDE_KEY: DOCKER
+        XDEBUG_LOG: /dev/stdout
+        XDEBUG_LOG_LEVEL: 7
+    env_file: [.env]
+    # Remplace les paramètres DB locaux par les adresses internes de Compose.
+    environment:
+      APP_URL: http://localhost
+      DB_CONNECTION: pgsql
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: app
+      DB_USERNAME: laravel
+      DB_PASSWORD: secret
+      REDIS_HOST: redis
+    user: "${UID:-1000}:${GID:-1000}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes: [./:/var/www]
+    networks: [laravel-development]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  workspace:
+    build:
+      context: .
+      dockerfile: ./docker/development/workspace/Dockerfile
+      args:
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+    tty: true
+    stdin_open: true
+    env_file: [.env]
+    environment:
+      APP_URL: http://localhost
+      DB_CONNECTION: pgsql
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_DATABASE: app
+      DB_USERNAME: laravel
+      DB_PASSWORD: secret
+      REDIS_HOST: redis
+    ports:
+      - "5173:5173"
+    volumes: [./:/var/www]
+    networks: [laravel-development]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: laravel
+      POSTGRES_PASSWORD: secret
+    ports:
+      # Publié pour les clients de base locaux ; les conteneurs utilisent postgres:5432.
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes: [postgres-data-development:/var/lib/postgresql]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U laravel -d app"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [laravel-development]
+
+  redis:
+    image: redis:7-alpine
+    networks: [laravel-development]
+
+networks:
+  laravel-development:
+
+volumes:
+  # Volume nommé : la base survit à la suppression du conteneur.
+  postgres-data-development:
